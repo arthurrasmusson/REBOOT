@@ -47,8 +47,8 @@ Python ≥ 3.8 is required.
 ## 3 . Installation
 
 ```bash
-git clone https://github.com/your‑org/reboot.git
-cd reboot
+git clone https://github.com/arthurrasmusson/REBOOT.git
+cd REBOOT
 python -m pip install -r requirements.txt    # pulls openai + tiktoken
 chmod +x open-refactor.py                    # or: ln -s …/open-refactor.py ~/bin/reboot
 ````
