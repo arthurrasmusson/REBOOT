@@ -1,0 +1,9 @@
+# Core runtime dependencies
+openai>=1.6          # OpenAI Python SDK for Chat Completions
+tiktoken>=0.5        # Accurate token counting (optional but strongly recommended)
+
+# Development / linting (optional; remove if not needed)
+# black>=24.3
+# flake8>=7.0
+# mypy>=1.9
+
