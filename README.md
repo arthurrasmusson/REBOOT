@@ -196,7 +196,7 @@ open-refactor.py \
 
 ## 12 . License
 
-Apache 2.0 © 2025‑present **Your Org**.  See `LICENSE` for full text.
+AGPLv3
 
 ---
 
