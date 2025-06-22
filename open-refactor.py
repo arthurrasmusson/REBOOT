@@ -211,28 +211,131 @@ def collect_binary_full(src: pathlib.Path, dst) -> None:
     dst.write(encoded + "\n")
 
 
-def collect_binary_disassembly(src: pathlib.Path, dst) -> None:
+def collect_binary_disassembly(
+    src: pathlib.Path,
+    dst,
+    *,
+    max_bytes: int = 20_000,
+) -> None:
     """
-    Produce a *brief* disassembly of *src* via `objdump -d`.
+    Dump a **succinct disassembly summary** of *src* into the already-opened
+    text stream *dst*.
 
-    If objdump is unavailable or fails, write a placeholder.
-    Only first 20 kB of objdump output is kept to bound token cost.
+    Priority order
+    --------------
+    1. **Ghidra headless (analyzeHeadless)** – richest analysis.
+       * Enabled automatically when:
+         • The environment variable **`GHIDRA_INSTALL_DIR`** points to a
+           valid Ghidra installation **and**
+         • `support/analyzeHeadless` is executable.
+       * Optional power-user controls via environment:
+         • **`GHIDRA_SCRIPT`** – path to a *GhidraScript* (.py or .java).
+           The script is invoked with `-scriptPath` / `-postScript`.
+         • **`GHIDRA_SCRIPT_ARGS`** – additional arguments passed to the
+           post-script (space-separated, will be *shlex* split).
+       * The function creates a _temporary_ project in `/tmp` (or OS temp dir)
+         and deletes it afterwards via `-deleteProject`.
+
+    2. **objdump –d** – portable, fast.  Used when Ghidra is unavailable or
+       fails for any reason.
+
+    3. Failure placeholder – writes a diagnostic so the caller still gets a
+       syntactically valid output file.
+
+    Parameters
+    ----------
+    src : pathlib.Path
+        Path to the binary file being summarised.
+    dst : IO[str]
+        Destination text stream (UTF-8) – e.g. the master output file.
+    max_bytes : int, optional
+        Hard cap on bytes written to *dst* for the disassembly.  Prevents
+        exploding token counts.  Default is 20 000.
+
+    Environment Variables Summary
+    -----------------------------
+    GHIDRA_INSTALL_DIR   – **required** for Ghidra mode  
+    GHIDRA_SCRIPT        – optional user GhidraScript (file path)  
+    GHIDRA_SCRIPT_ARGS   – optional extra args for the post-script  
     """
+    import tempfile
+    import shlex
+
+    ghidra_home = os.getenv("GHIDRA_INSTALL_DIR")
+
+    # ------------------------------------------------------------------ #
+    # Attempt Ghidra headless analysis first.
+    # ------------------------------------------------------------------ #
+    if ghidra_home:
+        headless = pathlib.Path(ghidra_home, "support", "analyzeHeadless")
+        if headless.exists() and os.access(headless, os.X_OK):
+            with tempfile.TemporaryDirectory(prefix="reboot_ghidra_") as tmpdir:
+                project_dir = pathlib.Path(tmpdir)
+                project_name = "tmp"
+                cmd: list[str] = [
+                    str(headless),
+                    str(project_dir),
+                    project_name,
+                    "-import", str(src),
+                    "-analysisTimeoutPerFile", "30",
+                    "-deleteProject",
+                ]
+
+                # --------- Optional user GhidraScript support ---------- #
+                user_script = os.getenv("GHIDRA_SCRIPT")
+                if user_script:
+                    script_path = pathlib.Path(user_script).expanduser().resolve()
+                    cmd += ["-scriptPath", str(script_path.parent)]
+                    # Split script args respecting quotes
+                    post_args = shlex.split(os.getenv("GHIDRA_SCRIPT_ARGS", ""))
+                    cmd += ["-postScript", script_path.name, *post_args]
+                # ------------------------------------------------------- #
+
+                try:
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        check=False,
+                        timeout=120,             # generous but bounded
+                    )
+                    ghidra_out = proc.stdout[:max_bytes]
+                    dst.write("[Ghidra analyzeHeadless]\n")
+                    dst.write(ghidra_out)
+                    if len(proc.stdout) > max_bytes:
+                        dst.write("\n[truncated …]\n")
+                    return
+                except subprocess.TimeoutExpired:
+                    dst.write("(Ghidra timed out – falling back to objdump)\n")
+                except Exception as exc:
+                    dst.write(f"(Ghidra failed: {exc!r} – falling back to objdump)\n")
+        else:
+            dst.write("(Ghidra headless helper not executable – falling back to objdump)\n")
+
+    # ------------------------------------------------------------------ #
+    # Fallback: objdump disassembly.
+    # ------------------------------------------------------------------ #
     try:
-        result = subprocess.run(
+        proc = subprocess.run(
             ["objdump", "-d", str(src)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=15,
+            timeout=30,
         )
-        snippet = result.stdout[:20_000] or "(objdump produced no output)\n"
+        snippet = proc.stdout[:max_bytes] or "(objdump produced no output)\n"
+        dst.write("[objdump -d]\n")
         dst.write(snippet)
+        if len(proc.stdout) > max_bytes:
+            dst.write("\n[truncated …]\n")
     except FileNotFoundError:
-        dst.write("(objdump not found)\n")
+        dst.write("(objdump not found; no disassembly produced)\n")
     except subprocess.TimeoutExpired:
-        dst.write("(objdump timed out)\n")
+        dst.write("(objdump timed out; no disassembly produced)\n")
+    except Exception as exc:
+        dst.write(f"(objdump failed: {exc!r})\n")
 
 
 # --------------------------------------------------------------------------- #

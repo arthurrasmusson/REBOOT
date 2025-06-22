@@ -1,206 +1,177 @@
 # REBOOT  
-**R**Eboot **E**xtends **B**inary reverse‑engineering via **O**ver‑RDMA‑Paged‑Attention & **O**penAI‑API **T**ransforms  
+**R**Eboot **E**xtends **B**inary reverse-engineering via **O**ver-RDMA-Paged-Attention & **O**penAI-API **T**ransforms  
 
 ---
 
-## 0 . AI for RE
+## 0 . AI for Reverse Engineering
 
-* **What?** &nbsp;A single‑file Python 3 CLI (`open‑refactor.py`) that can
-  *harvest* arbitrarily large codebases—including embedded binaries—into a
-  token‑friendly text bundle **and** push it (plus your system prompt) to any
-  OpenAI‑compatible Chat Completions endpoint.
+* **What?** &nbsp;`open-refactor.py` crawls one or more source trees, flattens every
+  file (including binaries) into a single UTF-8 bundle and, if you choose,
+  fires that bundle—plus your **system prompt**—at any OpenAI-compatible Chat
+  Completions endpoint.
 
-* **Why?** &nbsp;Feed a *long‑context* LLM (gpt‑4o‑long, home‑grown 10 M‑token
-  model, etc.) everything it needs for a **one‑shot refactor, audit, or reverse
-  engineering pass**—no retrieval plugin required.
+* **New in v0.3**  
+  Full **Ghidra headless** integration.  Supply an optional *GhidraScript* and
+  REBOOT will run a custom post-script for each binary, inserting the output
+  straight into the LLM prompt.
 
-* **Who?** &nbsp;Teams with a DGX, H100 pods, or an Azure “giga‑context” model
-  subscription who want to modernise or unmangle legacy monorepos *fast*.
+* **Who?** &nbsp;Reverse-engineers, platform migration teams, or anyone with a
+  long-context model (GPT-4o-long, Claude 200 k, bespoke 10 M-token model on a
+  DGX H200) who wants to do **one-shot refactors or audits**.
 
 ---
 
-## 1 . Features at a Glance
+## 1 . Feature Matrix
 
 | Category | Highlights |
 |----------|------------|
-| **Harvest** | Multi‑root crawl, VCS‑dirs ignored, text streamed line‑wise, binary options (omit / Base‑64 / disassembly). |
-| **Token‑aware** | Counts tokens (exact with `tiktoken`, heuristic fallback), prints a **budget table**, aborts if you exceed the model’s context (unless `--allow-overflow`). |
-| **Push‑button upload** | Reads system prompt from file, sends **system** + **user** messages to any OpenAI endpoint; streams replies live. |
-| **Memory‑safe** | No file read fully into RAM unless < 10 MB *and* needed for token precision. |
-| **Portable** | Pure std‑lib unless you enable extras (`openai`, `tiktoken`, `objdump`, `Ghidra`). Works on Linux, macOS, Windows. |
+| **Harvest** | Multi-root crawl, per-file headers, VCS-dirs ignored, streaming I/O, <br>binary choices: omit / Base-64 embed / objdump / **Ghidra headless**. |
+| **Ghidra Support** | Detects `GHIDRA_INSTALL_DIR`.  Executes `support/analyzeHeadless` with:<br>• `-analysisTimeoutPerFile 30` s<br>• Temporary project auto-deleted.<br>Optional environment hooks:<br>`GHIDRA_SCRIPT=/path/MyScript.py` & `GHIDRA_SCRIPT_ARGS="--foo 1"` |
+| **Token Budget** | Exact counts with `tiktoken` (< 10 MB files), heuristic fallback. Aborts if (input + output) > context (unless `--allow-overflow`). |
+| **Upload** | Any OpenAI-compatible base URL, streaming on by default. |
+| **Security** | No network unless you call the API.  Air-gapped mode with `--skip-upload`. |
 
 ---
 
-## 2 . Prerequisites
+## 2 . Prerequisites
 
-| Purpose | Package | Install |
-|---------|---------|---------|
-| 🗣️ Chat API | `openai>=1.6` | `pip install --upgrade openai` |
-| 🔢 Accurate token count | `tiktoken>=0.5` *(optional)* | `pip install tiktoken` |
-| 🛠️ Disassembly | `objdump` *(GNU binutils)* | system package manager |
-| 🔎 Deep binary analysis | **Ghidra** *(optional)* | download & set `GHIDRA_INSTALL_DIR` |
+| Purpose | Package / Tool | Install |
+|---------|----------------|---------|
+| Chat API | `openai>=1.6` | `pip install --upgrade openai` |
+| Accurate token counting | `tiktoken>=0.5` *(recommended)* | `pip install tiktoken` |
+| **Disassembly (basic)** | `objdump` (GNU binutils) | apt/yum/brew/pkg-manager |
+| **Disassembly (deep)** | **Ghidra 10.3+** | Download zip → `export GHIDRA_INSTALL_DIR=/opt/ghidra` |
+| (Optional) Custom analysis | Write a [GhidraScript](https://ghidra-sre.org/ClassDocumentation/) and set `GHIDRA_SCRIPT`, `GHIDRA_SCRIPT_ARGS`. |
 
-Python ≥ 3.8 is required.
+Python ≥ 3.8 required.
 
 ---
 
-## 3 . Installation
+## 3 . Installation
 
 ```bash
 git clone https://github.com/arthurrasmusson/REBOOT.git
-cd REBOOT
-python -m pip install -r requirements.txt    # pulls openai + tiktoken
-chmod +x open-refactor.py                    # or: ln -s …/open-refactor.py ~/bin/reboot
+cd reboot
+python -m pip install -r requirements.txt          # pulls openai + tiktoken
 ````
 
 ---
 
-## 4 . Anatomy of `open-refactor.py`
+## 4 . Using Ghidra Integration
 
-```text
-██ HARVEST
-   ├─ process_root()
-   │   ├─ directory listing block
-   │   └─ per‑file blocks (text vs binary)
-   └─ output → open-refactor-input-tokens.txt   (UTF‑8)
+### 4.1 Environment Variables
 
-██ TOKEN REPORT
-   ├─ estimate_file_tokens()   – precise if <10 MB & tiktoken, else heuristic
-   ├─ context window lookup    – table in script (edit for custom IDs)
-   └─ abort/warn if overflow   – unless --allow-overflow
+| Var                  | Required | Description                                                                             |
+| -------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `GHIDRA_INSTALL_DIR` | **Yes**  | Path containing `support/analyzeHeadless`                                               |
+| `GHIDRA_SCRIPT`      | No       | Path to your custom `.py`/`.java` script (must be inside a dir added to `-scriptPath`). |
+| `GHIDRA_SCRIPT_ARGS` | No       | Extra CLI args for your script.  Split with shell quoting (`shlex`).                    |
 
-██ UPLOAD (optional)
-   ├─ Reads system prompt (--path-to-refactor-prompt)
-   ├─ Configures endpoint (--openai-base-url)
-   └─ Streams reply or waits (default stream, --openai-no-stream for full)
+### 4.2 Example: include function list only
+
+```python
+# scripts/function_list.py
+from ghidra.app.script import GhidraScript
+from ghidra.program.model.symbol import SymbolType
+
+class FunctionList(GhidraScript):
+    def run(self):
+        for sym in self.currentProgram.symbolTable.getSymbolIterator(True):
+            if sym.getSymbolType() == SymbolType.FUNCTION:
+                print(sym.getName())
 ```
-
-### Key Data Flow
-
-```mermaid
-graph TD
-A[Source roots] -->|walk| B(open-refactor.py)
-B -->|text| C(open-refactor-input-tokens.txt)
-C -->|user msg| D(OpenAI endpoint)
-E[Prompt.txt] -->|system msg| D
-D -->|completion| F[Terminal stream / file]
-```
-
-*(Diagram rendered by GitHub’s Mermaid)*
-
----
-
-## 5 . Command‑line Cheat‑Sheet
 
 ```bash
-# Minimal harvest
-open-refactor.py --root-source-path PATH [...]
-
-# Include objdump summaries of binaries
-open-refactor.py [...] --collect-binary-disassembly
-
-# Base‑64 embed binaries (inflates size!)
-open-refactor.py [...] --collect-binaries-full
-
-# Produce file AND push to model
-export OPENAI_API_KEY=sk-...
-open-refactor.py [...] \
-    --path-to-refactor-prompt prompt.md \
-    --openai-model gpt-4o-long
-
-# Offline / air‑gapped – skip upload
-open-refactor.py [...] --skip-upload
-
-# Ignore overflow warning (e.g. for 10 M‑token custom model)
-open-refactor.py [...] --allow-overflow
-
-# Control expected completion budget
-open-refactor.py [...] --max-output-tokens 2048
-```
-
----
-
-## 6 . Token Budget Output
-
-At every run you’ll see something like:
-
-```text
-[Token budget]  System:  184   +  User: 9,881,462  +  Overhead: 8
-  = INPUT 9,881,654  |  Planned output 4,096  =>  TOTAL 9,885,750 tokens
-[!] WARNING: total tokens (9,885,750) exceed gpt-4o context (128,000).
-```
-
-Actions:
-
-* **Reduce input** – split repo, remove third‑party libs, omit binaries.
-* **Pick bigger model** – e.g. `gpt-4o-long`.
-* **`--allow-overflow`** – if your endpoint actually supports more.
-
----
-
-## 7 . Binary Handling Matrix
-
-| Flag combo                     | Effect in output                                  | When to use                                                          |
-| ------------------------------ | ------------------------------------------------- | -------------------------------------------------------------------- |
-| *(default)*                    | `"[note that this file was omitted]"` placeholder | You only need symbols/file names.                                    |
-| `--collect-binary-disassembly` | `objdump -d` (first 20 kB) or Ghidra report       | You need inline asm to refactor adjacent C/C++ code.                 |
-| `--collect-binaries-full`      | Base‑64 blob                                      | Rare; maybe you’ll pipe bytes into an LLM able to decompile raw ELF. |
-
----
-
-## 8 . End‑to‑End Example
-
-```bash
-# Harvest two NVIDIA repos, get disassembly, push to Azure OpenAI,
-# stream model output to a markdown patch file.
-
+export GHIDRA_INSTALL_DIR=/opt/ghidra
+export GHIDRA_SCRIPT=~/scripts/function_list.py
 open-refactor.py \
-  --root-source-path ~/src/tensorrt-llm \
-  --root-source-path ~/src/libnvinfer \
+    --root-source-path ~/fw/blobs \
+    --collect-binary-disassembly \
+    --output /tmp/fw_tokens.txt
+```
+
+The output block for every binary now begins with:
+
+```
+[Ghidra analyzeHeadless]
+func_init
+func_main
+...
+```
+
+If Ghidra is missing or fails, REBOOT **automatically falls back** to `objdump -d`.
+
+---
+
+## 5 . Binary Handling Strategy
+
+| Flag                           | Ghidra present? | Result in bundle                         | Token cost control |
+| ------------------------------ | --------------- | ---------------------------------------- | ------------------ |
+| *(default)*                    | N/A             | `[note that this file was omitted]`      | Minimal            |
+| `--collect-binary-disassembly` | **yes**         | Ghidra headless output (capped at 20 kB) | Moderate           |
+| `--collect-binary-disassembly` | **no**          | `objdump -d` output (20 kB cap)          | Moderate           |
+| `--collect-binaries-full`      | Irrelevant      | Base-64 blob of entire binary            | High               |
+
+*Cap size with `max_bytes` parameter inside the script if you customise.*
+
+---
+
+## 6 . Typical Workflows
+
+### 6.1 Full-fat refactor with Ghidra, push to OpenAI
+
+```bash
+export OPENAI_API_KEY=sk-...
+export GHIDRA_INSTALL_DIR=/opt/ghidra
+open-refactor.py \
+  --root-source-path ~/projects/legacy-fw \
   --collect-binary-disassembly \
-  --output /tmp/trt_bundle.txt \
-  --path-to-refactor-prompt prompts/upgrade_cuda12.md \
-  --openai-base-url https://mycompany.openai.azure.com/openai/deployments/v4 \
+  --path-to-refactor-prompt prompts/port_to_rust.txt \
   --openai-model gpt-4o-long \
-  --max-output-tokens 8192 \
-  | tee /tmp/patch.md
+  --max-output-tokens 8192
+```
+
+### 6.2 Air-gapped analysis for internal 10 M-token model
+
+```bash
+open-refactor.py \
+  --root-source-path /mnt/monorepo \
+  --collect-binary-disassembly \
+  --output /scratch/monorepo_tokens.txt \
+  --skip-upload
+# --------------------------------------------
+# Copy tokens + prompt into your on-prem model
 ```
 
 ---
 
-## 9 . Security Considerations
+## 7 . Token Budget Example
 
-* **Secrets** – The harvest is literal. Add `.env`, `*.pem`, etc. to a
-  `.rebootignore` *(feature planned)* or run a scrub pass before upload.
-* **Licensing** – Third‑party source may not allow uploading to OpenAI; audit data.
-* **Cost** – 10 M tokens ⇢ \$\$\$.  Verify with `--skip-upload` first.
+```
+[Token budget]  System:  312   +  User: 5,912,088  +  Overhead: 8
+  =  INPUT 5,912,408  |  Planned output 8,192  =>  TOTAL 5,920,600 tokens
+[*] Unknown context window for model 'my-10m-token-model'; proceed with caution.
+```
 
----
-
-## 10 . Limitations / Roadmap
-
-* **No incremental diff** – always full‑repo upload. Chunking/RAG mode TBD.
-* **Ghidra headless** – The script currently calls `objdump` only; a richer
-  `--collect-binary-disassembly-ghidra` flag is planned.
-* **Windows objdump** – require MSYS or LLVM `llvm-objdump`.
+Add `--allow-overflow` if your model truly supports 10 M tokens.
 
 ---
 
-## 11 . Contributing
+## 8 . Roadmap
 
-1. Fork → Branch → PR.
-2. Run `python -m pip install -r requirements-dev.txt && make lint test`.
-3. Ensure new features have docstrings + README update.
+* `.rebootignore` file pattern support.
+* Automatic chunking / retrieval-augmented generation.
+* Parallel disassembly for large firmware sets.
 
 ---
 
-## 12 . License
+## 9 . License
 
 AGPLv3
 
 ---
 
-## 13 . Reverse Acronym (because why not?)
+## 10 . Reverse Acronym
 
-> **R**Eboot **E**xtends **B**inary reverse‑engineering via **O**ver‑RDMA‑Paged‑Attention & **O**penAI‑API **T**ransforms
+> **R**Eboot **E**xtends **B**inary reverse-engineering via **O**ver-RDMA-Paged-Attention & **O**penAI-API **T**ransforms
 
