@@ -1,4 +1,4 @@
-# REBOOT  
+# REboot  
 **R**Eboot **E**xtends **B**inary reverse-engineering via **O**ver-RDMA-Paged-Attention & **O**penAI-API **T**ransforms  
 
 ---
@@ -12,7 +12,7 @@
 
 * **New in v0.3**  
   Full **Ghidra headless** integration.  Supply an optional *GhidraScript* and
-  REBOOT will run a custom post-script for each binary, inserting the output
+  REboot will run a custom post-script for each binary, inserting the output
   straight into the LLM prompt.
 
 * **Who?** &nbsp;Reverse-engineers, platform migration teams, or anyone with a
@@ -50,7 +50,7 @@ Python ≥ 3.8 required.
 ## 3 . Installation
 
 ```bash
-git clone https://github.com/arthurrasmusson/REBOOT.git
+git clone https://github.com/arthurrasmusson/REboot.git
 cd reboot
 python -m pip install -r requirements.txt          # pulls openai + tiktoken
 ````
@@ -99,7 +99,7 @@ func_main
 ...
 ```
 
-If Ghidra is missing or fails, REBOOT **automatically falls back** to `objdump -d`.
+If Ghidra is missing or fails, REboot **automatically falls back** to `objdump -d`.
 
 ---
 
