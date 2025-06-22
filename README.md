@@ -168,10 +168,3 @@ Add `--allow-overflow` if your model truly supports 10 M tokens.
 ## 9 . License
 
 AGPLv3
-
----
-
-## 10 . Reverse Acronym
-
-> **R**Eboot **E**xtends **B**inary reverse-engineering via **O**ver-RDMA-Paged-Attention & **O**penAI-API **T**ransforms
-
